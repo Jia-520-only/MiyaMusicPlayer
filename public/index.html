@@ -27195,6 +27195,38 @@ animate();
           })();
           break;
 
+        case 'play_multiple':
+          (async function() {
+            try {
+              var batch = params.tracks || [];
+              var src = params.source || 'netease';
+              if (!batch.length) { reply(rid, cid, false, null, 'No tracks provided'); return; }
+              // Clear and rebuild queue
+              if (typeof playQueue === 'undefined') playQueue = [];
+              playQueue.length = 0;
+              for (var t = 0; t < batch.length; t++) {
+                var tr = batch[t];
+                var song = {
+                  id: tr.id || '', name: tr.name || '', artist: tr.artist || '',
+                  cover: tr.cover || '', source: src, mid: tr.mid || ''
+                };
+                if (typeof cloneSong === 'function') {
+                  playQueue.push(cloneSong(song));
+                } else {
+                  playQueue.push(song);
+                }
+              }
+              currentIdx = 0;
+              if (typeof safeRenderQueuePanel === 'function') safeRenderQueuePanel('miya');
+              if (typeof safeShelfRebuild === 'function') safeShelfRebuild('miya');
+              if (typeof playQueueAt === 'function') {
+                await playQueueAt(0);
+              }
+              reply(rid, cid, true, getState());
+            } catch(e) { reply(rid, cid, false, null, e.message); }
+          })();
+          break;
+
         case 'get_playlist_tracks':
           (async function() {
             try {

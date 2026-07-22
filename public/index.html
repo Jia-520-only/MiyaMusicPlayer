@@ -27102,8 +27102,57 @@ animate();
           break;
 
         case 'like':
+          try {
+            if (currentIdx >= 0 && playQueue[currentIdx] && playQueue[currentIdx].id) {
+              await fetch('/api/song/like', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: playQueue[currentIdx].id, like: true })
+              });
+              reply(rid, cid, true, getState());
+            } else { reply(rid, cid, false, null, 'No song playing'); }
+          } catch(e) { reply(rid, cid, false, null, e.message); }
+          break;
+
         case 'unlike':
-          reply(rid, cid, true, getState());
+          try {
+            if (currentIdx >= 0 && playQueue[currentIdx] && playQueue[currentIdx].id) {
+              await fetch('/api/song/like', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ id: playQueue[currentIdx].id, like: false })
+              });
+              reply(rid, cid, true, getState());
+            } else { reply(rid, cid, false, null, 'No song playing'); }
+          } catch(e) { reply(rid, cid, false, null, e.message); }
+          break;
+
+        case 'create_playlist':
+          try {
+            var plName = params.name || 'New Playlist';
+            var plResp = await fetch('/api/playlist/create', {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ name: plName })
+            });
+            var plData = await plResp.json();
+            if (typeof refreshUserPlaylists === 'function') refreshUserPlaylists();
+            reply(rid, cid, true, plData);
+          } catch(e) { reply(rid, cid, false, null, e.message); }
+          break;
+
+        case 'shuffle_queue':
+          try {
+            if (typeof shuffleQueue === 'function') shuffleQueue();
+            reply(rid, cid, true, getState());
+          } catch(e) { reply(rid, cid, false, null, e.message); }
+          break;
+
+        case 'remove_from_queue':
+          try {
+            var idx = Number(params.index);
+            if (isFinite(idx) && typeof removeFromQueue === 'function') {
+              removeFromQueue(idx);
+              reply(rid, cid, true, getState());
+            } else { reply(rid, cid, false, null, 'Invalid index'); }
+          } catch(e) { reply(rid, cid, false, null, e.message); }
           break;
 
         case 'search':
@@ -27117,7 +27166,58 @@ animate();
           break;
 
         case 'add_to_queue':
-          reply(rid, cid, true, getState());
+          (async function() {
+            try {
+              var sr = await doSearch({ query: params.title || '', limit: 1, source: params.source || 'netease' });
+              if (sr.results.length > 0) {
+                var r = sr.results[0];
+                var s = {
+                  id: r.id || '',
+                  name: r.name || params.title || '',
+                  artist: r.artist || params.artist || '',
+                  cover: r.cover || params.cover || '',
+                  source: params.source || 'netease',
+                  mid: r.mid || ''
+                };
+                if (typeof cloneSong === 'function') {
+                  playQueue.push(cloneSong(s));
+                } else {
+                  playQueue.push(s);
+                }
+                if (currentIdx < 0) currentIdx = 0;
+                if (typeof safeRenderQueuePanel === 'function') safeRenderQueuePanel('miya');
+                if (typeof safeShelfRebuild === 'function') safeShelfRebuild('miya');
+                reply(rid, cid, true, getState());
+              } else {
+                reply(rid, cid, false, null, 'Could not find track to add');
+              }
+            } catch(e) { reply(rid, cid, false, null, e.message); }
+          })();
+          break;
+
+        case 'get_playlist_tracks':
+          (async function() {
+            try {
+              var pid = params.playlist_id || '';
+              var src = params.source || 'netease';
+              if (!pid) { reply(rid, cid, false, null, 'Missing playlist_id'); return; }
+              var tracks = [];
+              if (src === 'qq') {
+                var qqResp = await fetch('/api/qq/playlist/tracks?id=' + encodeURIComponent(pid));
+                var qqData = await qqResp.json();
+                tracks = qqData.tracks || qqData.songs || [];
+              } else {
+                var neResp = await fetch('/api/playlist/tracks?id=' + encodeURIComponent(pid));
+                var neData = await neResp.json();
+                tracks = neData.tracks || neData.songs || [];
+              }
+              var mapped = tracks.map(function(t) { return {
+                id: t.id || '', name: t.name || '', artist: t.artist || (t.ar ? t.ar.map(function(a){return a.name;}).join('/') : ''),
+                cover: t.cover || (t.al ? t.al.picUrl : '') || '', source: src
+              };});
+              reply(rid, cid, true, { tracks: mapped, total: mapped.length, playlist_id: pid });
+            } catch(e) { reply(rid, cid, false, null, e.message); }
+          })();
           break;
 
         case 'get_playlists':

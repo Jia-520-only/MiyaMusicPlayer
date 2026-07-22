@@ -27221,6 +27221,15 @@ animate();
           break;
 
         case 'get_playlists':
+          // Trigger refresh if lists are empty (page may not have loaded yet)
+          if ((typeof userPlaylists === 'undefined' || !userPlaylists || userPlaylists.length === 0) &&
+              typeof refreshUserPlaylists === 'function') {
+            try { await refreshUserPlaylists(true); } catch(e) {}
+          }
+          if ((typeof qqPlaylists === 'undefined' || !qqPlaylists || qqPlaylists.length === 0) &&
+              typeof refreshQQLoginStatus === 'function') {
+            try { await refreshQQLoginStatus(); } catch(e) {}
+          }
           reply(rid, cid, true, {
             netease: (typeof userPlaylists !== 'undefined' ? userPlaylists : []),
             qq: (typeof qqPlaylists !== 'undefined' ? qqPlaylists : [])

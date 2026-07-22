@@ -27008,7 +27008,7 @@ animate();
     } catch(e) { return false; }
   }
 
-  function handle(msg) {
+  async function handle(msg) {
     var action = msg.action || '';
     var params = msg.params || {};
     var rid = msg.request_id || '';

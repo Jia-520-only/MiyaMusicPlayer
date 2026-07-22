@@ -53,6 +53,7 @@ const tls = require('tls');
 const { once } = require('events');
 const { fileURLToPath } = require('url');
 const { analyzePodcastDjStream, analyzePodcastDjIntro } = require('./dj-analyzer');
+const { getInstance: getMiyaPlugin } = require('./miya-plugin');
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -3261,6 +3262,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pn === '/api/miya/health') {
+    const miya = getMiyaPlugin();
+    sendJSON(res, miya.healthStatus());
+    return;
+  }
+
   if (pn === '/api/update/latest') {
     try {
       sendJSON(res, await fetchLatestUpdateInfo());
@@ -4195,9 +4202,13 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log('======================================================');
-  console.log(' 粒子音乐可视化 v2  →  http://localhost:' + PORT);
-  console.log(' 登录态: ' + (userCookie ? '已登录(cookie已加载)' : '未登录'));
+  console.log(' Mineradio v2  →  http://localhost:' + PORT);
+  console.log(' Login: ' + (userCookie ? 'logged in (cookie loaded)' : 'not logged in'));
   console.log('======================================================');
+
+  const miya = getMiyaPlugin();
+  miya.attach(server);
+  miya.writePortFile(PORT);
 });
 
 module.exports = server;

@@ -26874,6 +26874,282 @@ function animate() {
   renderer.render(scene, camera);
 }
 animate();
+
+// ============================================================
+//  MIYA control bridge - WebSocket bidirectional communication
+//  Ultra-defensive minimal version
+(function miyaBridge() {
+  'use strict';
+  var ws = null;
+  var timer = null;
+
+  function log() { try { console.log.apply(console, arguments); } catch(e) {} }
+
+  function doConnect() {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
+    try { ws = new WebSocket('ws://' + window.location.host + '/miya'); }
+    catch(e) { scheduleReconnect(); return; }
+
+    ws.onopen = function() {
+      log('[MIYA] connected');
+      try { ws.send(JSON.stringify({type:'identity',role:'frontend'})); } catch(e) {}
+    };
+
+    ws.onmessage = function(e) {
+      try {
+        var msg = JSON.parse(e.data);
+        if (msg.type === 'command') handle(msg);
+      } catch(err) {}
+    };
+
+    ws.onclose = function() { ws = null; scheduleReconnect(); };
+    ws.onerror = function() {};
+  }
+
+  function scheduleReconnect() {
+    if (timer) return;
+    timer = setTimeout(function() { timer = null; doConnect(); }, 3000);
+  }
+
+  function reply(requestId, clientId, ok, data, err) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({
+        type: 'command_response',
+        request_id: requestId || '',
+        client_id: clientId || '',
+        ok: !!ok,
+        data: data || null,
+        error: err || null
+      }));
+    } catch(e) {}
+  }
+
+  function getState() {
+    try {
+      var song = null;
+      if (typeof currentIdx !== 'undefined' && typeof playQueue !== 'undefined' &&
+          currentIdx >= 0 && currentIdx < playQueue.length) {
+        var s = playQueue[currentIdx];
+        song = { id: s.id||'', name: s.name||'', artist: s.artist||'', album: s.album||'', cover: s.cover||'', source: s.source||'', mid: s.mid||'' };
+      }
+      return {
+        song: song,
+        playing: !!(typeof audio !== 'undefined' && audio && !audio.paused && !audio.ended),
+        progress: (typeof audio !== 'undefined' && audio) ? (audio.currentTime||0) : 0,
+        duration: (typeof audio !== 'undefined' && audio) ? (audio.duration||0) : 0,
+        volume: typeof targetVolume !== 'undefined' ? Math.round(targetVolume*100) : 0,
+        muted: typeof targetVolume !== 'undefined' ? targetVolume < 0.01 : false,
+        mode: typeof playMode !== 'undefined' ? playMode : 'loop',
+        queue_length: typeof playQueue !== 'undefined' ? playQueue.length : 0,
+        queue_index: typeof currentIdx !== 'undefined' ? currentIdx : -1
+      };
+    } catch(e) { return {}; }
+  }
+
+  async function doSearch(params) {
+    var query = params.query || '';
+    var source = params.source || '';
+    var limit = params.limit || 10;
+    if (source !== 'qq') source = 'netease';
+    if (!query) return { source: source, results: [] };
+
+    try {
+      var controller = new AbortController();
+      var t = setTimeout(function() { controller.abort(); }, 12000);
+      var resp, data;
+
+      if (source === 'qq') {
+        resp = await fetch('/api/qq/search?keywords=' + encodeURIComponent(query) + '&limit=' + limit, { signal: controller.signal });
+      } else {
+        resp = await fetch('/api/search?keywords=' + encodeURIComponent(query) + '&limit=' + limit, { signal: controller.signal });
+      }
+      clearTimeout(t);
+      data = await resp.json();
+      var songs = data.songs || data.result || [];
+      return { source: source, results: Array.isArray(songs) ? songs.slice(0, limit) : [] };
+    } catch(e) {
+      return { source: source, results: [] };
+    }
+  }
+
+  async function doPlay(params) {
+    var title = params.title || '';
+    var artist = params.artist || '';
+    try {
+      if (title) {
+        var sr = await doSearch({ query: title + (artist ? ' ' + artist : ''), limit: 3 });
+        if (sr.results.length > 0) {
+          var r = sr.results[0];
+          var song = {
+            id: r.id || '',
+            name: r.name || title,
+            artist: r.artist || artist || '',
+            cover: r.cover || '',
+            source: r.source || 'netease',
+            mid: r.mid || '',
+            album: r.album || ''
+          };
+          if (typeof playQueue === 'undefined') playQueue = [];
+          playQueue.length = 0;
+          if (typeof cloneSong === 'function') {
+            playQueue.push(cloneSong(song));
+          } else {
+            playQueue.push(song);
+          }
+          currentIdx = 0;
+          if (typeof safeRenderQueuePanel === 'function') safeRenderQueuePanel('miya');
+          if (typeof safeShelfRebuild === 'function') safeShelfRebuild('miya');
+          if (typeof playQueueAt === 'function') await playQueueAt(0);
+          return true;
+        }
+      }
+      return false;
+    } catch(e) { return false; }
+  }
+
+  function handle(msg) {
+    var action = msg.action || '';
+    var params = msg.params || {};
+    var rid = msg.request_id || '';
+    var cid = msg.client_id || '';
+
+    try {
+      switch (action) {
+        case 'ping':
+          reply(rid, cid, true, { pong: true });
+          break;
+
+        case 'get_status':
+        case 'get_queue':
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'play':
+        case 'resume':
+          try {
+            if (typeof audio !== 'undefined' && audio && (audio.paused || audio.ended) && typeof togglePlay === 'function') {
+              togglePlay();
+            } else if ((!audio || !audio.src) && typeof playQueueAt === 'function' && playQueue.length > 0 && currentIdx >= 0) {
+              playQueueAt(currentIdx);
+            }
+          } catch(e) {}
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'pause':
+          try {
+            if (typeof audio !== 'undefined' && audio && !audio.paused && typeof fadeOutAndPauseAudio === 'function') {
+              fadeOutAndPauseAudio();
+              playing = false;
+              if (typeof setPlayIcon === 'function') setPlayIcon(false);
+            }
+          } catch(e) {}
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'toggle_play':
+          try { if (typeof togglePlay === 'function') togglePlay(); } catch(e) {}
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'next':
+          try { if (typeof nextTrack === 'function') nextTrack(); } catch(e) {}
+          setTimeout(function() { reply(rid, cid, true, getState()); }, 400);
+          break;
+
+        case 'prev':
+          try { if (typeof prevTrack === 'function') prevTrack(); } catch(e) {}
+          setTimeout(function() { reply(rid, cid, true, getState()); }, 400);
+          break;
+
+        case 'seek':
+          try {
+            if (typeof audio !== 'undefined' && audio && audio.src) {
+              var pos = Number(params.position) || 0;
+              if (isFinite(pos)) audio.currentTime = pos;
+            }
+          } catch(e) {}
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'volume':
+          try {
+            if (typeof setVolume === 'function' && params.value !== undefined) {
+              var v = Number(params.value);
+              if (isFinite(v)) setVolume(Math.max(0, Math.min(1, v/100)), true);
+            }
+          } catch(e) {}
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'mute':
+          try { if (typeof toggleMute === 'function') toggleMute(); } catch(e) {}
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'set_mode':
+          if (params.mode && ['loop','shuffle','single'].indexOf(params.mode) >= 0) {
+            playMode = params.mode;
+            try { if (typeof updatePlayModeButton === 'function') updatePlayModeButton(true); } catch(e) {}
+          }
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'clear_queue':
+          try { if (typeof clearQueue === 'function') clearQueue(); } catch(e) {}
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'like':
+        case 'unlike':
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'search':
+          doSearch(params).then(function(r) { reply(rid, cid, true, r); })
+            .catch(function(e) { reply(rid, cid, false, null, e.message); });
+          break;
+
+        case 'play_song':
+          doPlay(params).then(function(ok) { reply(rid, cid, ok, getState()); })
+            .catch(function(e) { reply(rid, cid, false, null, e.message); });
+          break;
+
+        case 'add_to_queue':
+          reply(rid, cid, true, getState());
+          break;
+
+        case 'get_playlists':
+          reply(rid, cid, true, {
+            netease: (typeof userPlaylists !== 'undefined' ? userPlaylists : []),
+            qq: (typeof qqPlaylists !== 'undefined' ? qqPlaylists : [])
+          });
+          break;
+
+        case 'get_lyrics':
+          reply(rid, cid, true, {
+            lines: (typeof lyricsLines !== 'undefined' ? lyricsLines : []),
+            visible: (typeof lyricsVisible !== 'undefined' ? lyricsVisible : false)
+          });
+          break;
+
+        default:
+          reply(rid, cid, false, null, 'Unknown: ' + action);
+      }
+    } catch(e) {
+      reply(rid, cid, false, null, e.message || 'handler error');
+    }
+  }
+
+  // Start after page fully loads
+  setTimeout(function() { doConnect(); }, 3000);
+  // Keep-alive reconnect
+  setInterval(function() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) doConnect();
+  }, 10000);
+})();
+
 </script>
 </body>
 </html>
